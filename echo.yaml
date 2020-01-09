@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: echo
+  name: echo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: echo
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: echo
+      annotations:
+        #"consul.hashicorp.com/connect-inject": "true"
+        linkerd.io/inject: enabled
+    spec:
+      containers:
+      - image: kesselborn/echo
+        name: echo
+        command: ["/echo", "-addr=127.0.0.1:8080"]
+        resources: {}
+status: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app: echo
+  name: echo
+spec:
+  ports:
+  - name: 8080-8080
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: echo
+  type: ClusterIP
+status:
+  loadBalancer: {}

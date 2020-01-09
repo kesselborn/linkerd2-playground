@@ -1,0 +1,99 @@
+#!/bin/sh
+
+KINDCONFIG=kind.kubeconfig
+
+_functions() {
+  grep '^[A-Za-z].*()[ ]*{' $0|grep -v '^__'|tr -d '(){#'|sed 's/^/	/g'
+}
+
+_usage() {
+  cat<<EOF
+Usage: $0 COMMAND
+
+available commands:
+  $(_functions)
+EOF
+}
+
+install_cli() {                # install linkerd cli
+  which linkerd &>/dev/null || brew install linkerd
+  linkerd check --pre
+}
+
+_install_kind() {
+  test -e ./kind && return
+  curl -Lo ./kind https://github.com/kubernetes-sigs/kind/releases/download/v0.6.1/kind-$(uname)-amd64
+  chmod +x ./kind
+}
+
+launch_kind_cluster() {        # launch kind cluster for experimentation
+  _install_kind
+  KUBECONFIG=${KINDCONFIG} kubectl cluster-info &>/dev/null && return
+  ./kind create cluster --config kind.yaml --name linkerd2 --kubeconfig ${KINDCONFIG}
+  printf "waiting for node to become ready "
+  (set +x
+  for _ in $(seq 0 120)
+  do
+    sleep 1
+    printf "."
+    kubectl get nodes|grep " Ready " && break
+  done
+  )
+}
+
+delete_kind_cluster() {        # deletes the linkerd2 kind cluster
+  ./kind delete cluster --name linkerd2 --kubeconfig ${KINDCONFIG}
+}
+
+install_linkerd() {            # install linkerd in current cluster
+  linkerd install | kubectl apply --wait -f -
+  linkerd check --wait 5m
+}
+
+install_ingress_controller() { # installs and sets up ingress controller
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/master/deploy/static/mandatory.yaml
+  kubectl patch deployments -n ingress-nginx nginx-ingress-controller -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx-ingress-controller","ports":[{"containerPort":80,"hostPort":80},{"containerPort":443,"hostPort":443}]}],"nodeSelector":{"ingress-ready":"true"},"tolerations":[{"key":"node-role.kubernetes.io/master","operator":"Equal","effect":"NoSchedule"}]}}}}' 
+}
+
+install_demo_app_normal() {    # installs demo app w/o linkerd proxy
+  curl -sL https://run.linkerd.io/emojivoto.yml | kubectl apply --wait -f -
+  echo "open http://localhost:8080"
+  kubectl -n emojivoto port-forward svc/web-svc 8080:80
+}
+
+install_demo_app_linkerd() {   # installs demo app w/ linkerd proxy
+  curl -sL https://run.linkerd.io/emojivoto.yml | linkerd inject - | kubectl apply --wait -f -
+  linkerd -n emojivoto check --proxy
+  cat<<EOF
+Things to do:
+
+  linkerd -n emojivoto stat deploy
+  linkerd -n emojivoto top deploy
+  linkerd -n emojivoto tap deploy/web
+  linkerd dashboard
+
+  echo "open http://localhost:8080"
+  kubectl -n emojivoto port-forward svc/web-svc 8080:80
+EOF
+}
+
+create_local_setup() {         # create kind cluster and install linkerd
+  launch_kind_cluster
+  install_cli
+  export KUBECONFIG=${KINDCONFIG}
+
+  install_linkerd
+  install_ingress_controller
+  echo "please export KUBECONFIG=${KINDCONFIG}"
+}
+
+if [ -z "$1" ] || ! echo $(_functions)|grep $1 >/dev/null
+then
+  _usage
+  exit 1
+fi
+
+test -e ${KINDCONFIG} && export KUBECONFIG=${KINDCONFIG}
+
+set -x
+$@
